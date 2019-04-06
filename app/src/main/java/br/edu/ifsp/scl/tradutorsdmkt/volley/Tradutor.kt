@@ -9,17 +9,20 @@ import br.edu.ifsp.scl.tradutorsdmkt.model.Constantes.APP_KEY_VALUE
 import br.edu.ifsp.scl.tradutorsdmkt.model.Constantes.END_POINT
 import br.edu.ifsp.scl.tradutorsdmkt.model.Constantes.URL_BASE
 import br.edu.ifsp.scl.tradutorsdmkt.model.Resposta
+import br.edu.ifsp.scl.tradutorsdmkt.model.Translation
 import com.android.volley.Request
 import com.android.volley.RequestQueue
 import com.android.volley.Response
 import com.android.volley.VolleyError
 import com.android.volley.toolbox.JsonObjectRequest
 import com.android.volley.toolbox.Volley
-import com.google.gson.Gson
+import com.google.gson.*
+import com.google.gson.reflect.TypeToken
 import kotlinx.android.synthetic.main.activity_main.*
 import org.jetbrains.anko.design.snackbar
 import org.json.JSONException
 import org.json.JSONObject
+import java.lang.reflect.Type
 
 class Tradutor(val mainActivity: MainActivity) {
 // As funções abaixo devem ser adicionadas aqui
@@ -63,7 +66,8 @@ class Tradutor(val mainActivity: MainActivity) {
 
     /* Trata a resposta de uma requisição quando o acesso ao WS foi realizado. Complexidade de O(N^5).
     Pode causar problemas de desempenho com respostas muito grandes */
-    inner class RespostaListener : Response.Listener<JSONObject> {
+
+/*  inner class RespostaListener : Response.Listener<JSONObject> {
         override fun onResponse(response: JSONObject?) {
             try {
                 // Cria um objeto Gson que consegue fazer reflexão de um Json para Data Class
@@ -94,6 +98,95 @@ class Tradutor(val mainActivity: MainActivity) {
             }
         }
     }
+    */
+
+
+
+
+
+    // Desserializador personalizado. Complexide O(N^2)
+    class TranslationListDeserializer : JsonDeserializer<List<Translation>> {
+        // Função que desserializa o Json e retorna uma lista de objetos Translation
+        override fun deserialize(
+            json: JsonElement?,
+            typeOfT: Type?,
+            context: JsonDeserializationContext?
+        ): List<Translation> {
+            // Recuperando o JsonArray “results” do Objeto completo Json
+            var results: JsonArray? = json?.asJsonObject?.getAsJsonArray("results")
+            // Juntando os JsonArrays “lexicalEntries” de todos “results” num só JsonArray, O(N^2)
+            val lexicalEntries: JsonArray = JsonArray()
+            results?.forEach {
+                it?.let {
+                    lexicalEntries.addAll(it.asJsonObject?.getAsJsonArray("lexicalEntries"))
+                }
+            }
+            // Juntando os JsonArrays “entries” de todos “lexicalEntries” num só JsonArray, O(N^2)
+            val entries: JsonArray = JsonArray()
+            lexicalEntries?.forEach {
+                it?.let {
+                    entries.addAll(it.asJsonObject?.getAsJsonArray("entries"))
+                }
+            }
+            // Juntando todos os JsonArrays “senses” de todos “entries” num só JsonArray, O(N^2)
+            val senses: JsonArray = JsonArray()
+            entries.forEach {
+                it?.let {
+                    senses.addAll(it.asJsonObject?.getAsJsonArray("senses"))
+                }
+            }
+            /* Juntando todos os JsonArrays “translations” de todos “senses” num só JsonArray,
+            O(N^2) */
+            val translations: JsonArray = JsonArray()
+            senses.forEach {
+                it?.let {
+                    translations.addAll(it.asJsonObject?.getAsJsonArray("translations"))
+                }
+            }
+            // Extraindo os campos, criando os objetos Translation e colocando na lista de retorno
+            val listaTranslations: MutableList<Translation> = mutableListOf()
+            translations.forEach {
+                it?.let {
+                    val translation: Translation = Translation()
+                    translation.language = it.asJsonObject?.get("language").toString()
+                    translation.text = it.asJsonObject?.get("text").toString()
+                    listaTranslations.add(translation)
+                }
+            }
+
+            return listaTranslations
+        }
+    }
+
+
+
+
+    /* Trata a resposta de uma requisição quando o acesso ao WS foi realizado. Usa um Desserializador
+O(N^2) */
+    inner class RespostaListener : Response.Listener<JSONObject> {
+        override fun onResponse(response: JSONObject?) {
+            try {
+                // Usa um builder que usa o desserializador personalizado para criar um objeto Gson
+                val gsonBuilder: GsonBuilder = GsonBuilder()
+                // Usa reflexão para extrair o tipo da classe de um List<Translation>
+                val listTranslationType = object : TypeToken<List<Translation>>() {}.type
+                // Seta o desserializador personalizado no builder
+                gsonBuilder.registerTypeAdapter(listTranslationType, TranslationListDeserializer())
+                /* Usa o builder para criar um Gson e usa o Gson para converter o Json de resposta numa lista de
+                Translation usando o desserializador personalizado. */
+                val listTranslation: List<Translation> =
+                    gsonBuilder.create().fromJson(response.toString(), listTranslationType)
+                // Extrai somente o texto dos objetos Translation
+                val listTranslationString: StringBuffer = StringBuffer()
+                listTranslation.forEach { listTranslationString.append("${it.text}, ") }
+                mainActivity.tradutoHandler.obtainMessage(RESPOSTA_TRADUCAO,
+                    listTranslationString.toString().substringBeforeLast(',')).sendToTarget()
+            } catch (je: JSONException) {
+                mainActivity.mainLl.snackbar("Erro na conversão JSON")
+            }
+        }
+    }
+
 
 
     // Trata erros na requisição ao WS
